@@ -50,6 +50,9 @@
 
     <transition :name="transition">
       <ul ref="dropdownMenu" v-if="dropdownOpen" class="vs__dropdown-menu" role="listbox" @mousedown="onMousedown" @mouseup="onMouseUp">
+        <li v-if="$slots.header">
+          <slot name="header"></slot>
+        </li>
         <li
           role="option"
           v-for="(option, index) in filteredOptions"
@@ -65,6 +68,9 @@
         </li>
         <li v-if="!filteredOptions.length" class="vs__no-options" @mousedown.stop="">
           <slot name="no-options">Sorry, no matching options.</slot>
+        </li>
+        <li v-if="$slots.footer">
+          <slot name="footer"></slot>
         </li>
       </ul>
     </transition>

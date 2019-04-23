@@ -27,7 +27,7 @@ module.exports = merge(baseWebpackConfig, {
       modules: false,
       chunks: false,
     },
-    port: 8080,
+    port: 8085,
     before (app, server) {
       chokidar.watch([
         './**/*.html',
