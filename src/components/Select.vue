@@ -519,6 +519,7 @@
       }
 
       this.$on('option:created', this.maybePushTag)
+      this.$on('option:blur', this.onAfterSelect)
     },
 
     methods: {
