@@ -788,6 +788,7 @@
       onSearchBlur() {
         if (this.mousedown && !this.searching) {
           this.mousedown = false
+          this.closeSearchOptions()
         } else {
           if (this.clearSearchOnBlur) {
             this.search = ''
