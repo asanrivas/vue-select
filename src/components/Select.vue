@@ -52,7 +52,7 @@
 
     <transition :name="transition">
       <ul ref="dropdownMenu" v-if="dropdownOpen" class="vs__dropdown-menu" role="listbox" @mousedown="onMousedown" @mouseup="onMouseUp">
-        <li v-if="$slots.header">
+        <li v-if="$slots.header" @mousedown.prevent.stop>
           <slot name="header"></slot>
         </li>
         <li
@@ -71,7 +71,7 @@
         <li v-if="!filteredOptions.length" class="vs__no-options" @mousedown.stop="">
           <slot name="no-options">Sorry, no matching options.</slot>
         </li>
-        <li v-if="$slots.footer">
+        <li v-if="$slots.footer" @mousedown.prevent.stop>
           <slot name="footer"></slot>
         </li>
       </ul>
@@ -519,7 +519,6 @@
       }
 
       this.$on('option:created', this.maybePushTag)
-      this.$on('option:blur', this.onAfterSelect)
     },
 
     methods: {
@@ -808,7 +807,7 @@
        * @emits  {search:focus}
        * @return {void}
        */
-      onSearchFocus() {
+      onSearchFocus(event) {
         this.open = true
         this.$emit('search:focus')
       },
