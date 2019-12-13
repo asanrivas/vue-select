@@ -17,7 +17,7 @@
             <slot name="selected-option" v-bind="normalizeOptionForSlot(option)">
               {{ getOptionLabel(option) }}
             </slot>
-            <button v-if="multiple" :disabled="disabled" @click="deselect(option)" type="button" class="vs__deselect" aria-label="Deselect option">
+            <button v-if="multiple" :disabled="disabled" @click="deselect(option)" type="button" class="vs__deselect" aria-label="Deselect option" ref="deselectButtons">
               <component :is="childComponents.Deselect" />
             </button>
           </span>
@@ -28,7 +28,7 @@
         </slot>
       </div>
 
-      <div class="vs__actions">
+      <div class="vs__actions" ref="actions">
         <button
           v-show="showClearButton"
           :disabled="disabled"
@@ -36,6 +36,7 @@
           type="button"
           class="vs__clear"
           title="Clear selection"
+          ref="clearButton"
         >
           <component :is="childComponents.Deselect" />
         </button>
@@ -51,7 +52,7 @@
     </div>
 
     <transition :name="transition">
-      <ul ref="dropdownMenu" v-if="dropdownOpen" class="vs__dropdown-menu" role="listbox" @mousedown="onMousedown" @mouseup="onMouseUp">
+      <ul ref="dropdownMenu" v-if="dropdownOpen" class="vs__dropdown-menu" role="listbox" @mousedown.prevent="onMousedown" @mouseup="onMouseUp">
         <li v-if="$slots.header" @mousedown.prevent.stop>
           <slot name="header"></slot>
         </li>
@@ -60,9 +61,9 @@
           v-for="(option, index) in filteredOptions"
           :key="getOptionKey(option)"
           class="vs__dropdown-option"
-          :class="{ 'vs__dropdown-option--selected': isOptionSelected(option), 'vs__dropdown-option--highlight': index === typeAheadPointer }"
-          @mouseover="typeAheadPointer = index"
-          @mousedown.prevent.stop="select(option)"
+          :class="{ 'vs__dropdown-option--selected': isOptionSelected(option), 'vs__dropdown-option--highlight': index === typeAheadPointer, 'vs__dropdown-option--disabled': !selectable(option) }"
+          @mouseover="selectable(option) ? typeAheadPointer = index : null"
+          @mousedown.prevent.stop="selectable(option) ? select(option) : null"
         >
           <slot name="option" v-bind="normalizeOptionForSlot(option)">
             {{ getOptionLabel(option) }}
@@ -85,6 +86,9 @@
   import ajax from '../mixins/ajax'
   import childComponents from './childComponents';
 
+  /**
+   * @name VueSelect
+   */
   export default {
     components: {...childComponents},
 
@@ -231,6 +235,20 @@
       },
 
       /**
+       * Decides whether an option is selectable or not. Not selectable options
+       * are displayed but disabled and cannot be selected.
+       *
+       * @type {Function}
+       * @since 3.3.0
+       * @param {Object|String} option
+       * @return {Boolean}
+       */
+      selectable: {
+        type: Function,
+        default: option => true,
+      },
+
+      /**
        * Callback to generate the label text. If {option}
        * is an object, returns option[this.label] by default.
        *
@@ -286,8 +304,7 @@
                 `to generate unique key. Please provide'getOptionKey' prop ` +
                 `to return a unique key for each option.\n` +
                 'https://vue-select.org/api/props.html#getoptionkey'
-              )
-              return null
+              );
             }
           }
         }
@@ -295,11 +312,12 @@
 
       /**
        * Select the current value if selectOnTab is enabled
+       * @deprecated since 3.3
        */
       onTab: {
         type: Function,
         default: function () {
-          if (this.selectOnTab) {
+          if (this.selectOnTab && !this.isComposing) {
             this.typeAheadSelect();
           }
         },
@@ -391,23 +409,26 @@
        */
       createOption: {
         type: Function,
-        default(newOption) {
-          if (typeof this.optionList[0] === 'object') {
-            newOption = {[this.label]: newOption}
-          }
-
-          this.$emit('option:created', newOption)
-          return newOption
-        }
+        default (option) {
+          return (typeof this.optionList[0] === 'object') ? {[this.label]: option} : option;
+        },
       },
 
       /**
-       * When false, updating the options will not reset the select value
-       * @type {Boolean}
+       * When false, updating the options will not reset the selected value. Accepts
+       * a `boolean` or `function` that returns a `boolean`. If defined as a function,
+       * it will receive the params listed below.
+       *
+       * @since 3.4 - Type changed to {Boolean|Function}
+       *
+       * @type {Boolean|Function}
+       * @param {Array} newOptions
+       * @param {Array} oldOptions
+       * @param {Array} selectedValue
        */
       resetOnOptionsChange: {
-        type: Boolean,
-        default: false
+        default: false,
+        validator: (value) => ['function', 'boolean'].includes(typeof value)
       },
 
       /**
@@ -442,10 +463,20 @@
       /**
        * When true, hitting the 'tab' key will select the current select value
        * @type {Boolean}
+       * @deprecated since 3.3 - use selectOnKeyCodes instead
        */
       selectOnTab: {
         type: Boolean,
         default: false
+      },
+
+      /**
+       * Keycodes that will select the current option.
+       * @type Array
+       */
+      selectOnKeyCodes: {
+        type: Array,
+        default: () => [13],
       },
 
       /**
@@ -460,6 +491,21 @@
       searchInputQuerySelector: {
         type: String,
         default: '[type=search]'
+      },
+
+      /**
+       * Used to modify the default keydown events map
+       * for the search input. Can be used to implement
+       * custom behaviour for key presses.
+       */
+      mapKeydown: {
+        type: Function,
+        /**
+         * @param map {Object}
+         * @param vm {VueSelect}
+         * @return {Object}
+         */
+        default: (map, vm) => map,
       }
     },
 
@@ -467,6 +513,7 @@
       return {
         search: '',
         open: false,
+        isComposing: false,
         pushedTags: [],
         _value: [] // Internal value managed by Vue Select if no `value` prop is passed
       }
@@ -480,13 +527,17 @@
        * is correct.
        * @return {[type]} [description]
        */
-      options(val) {
-        if (!this.taggable && this.resetOnOptionsChange) {
-          this.clearSelection()
+      options (newOptions, oldOptions) {
+        let shouldReset = () => typeof this.resetOnOptionsChange === 'function'
+          ? this.resetOnOptionsChange(newOptions, oldOptions, this.selectedValue)
+          : this.resetOnOptionsChange;
+
+        if (!this.taggable && shouldReset()) {
+          this.clearSelection();
         }
 
         if (this.value && this.isTrackingValues) {
-          this.setInternalValueFromOptions(this.value)
+          this.setInternalValueFromOptions(this.value);
         }
       },
 
@@ -544,7 +595,8 @@
       select(option) {
         if (!this.isOptionSelected(option)) {
           if (this.taggable && !this.optionExists(option)) {
-            option = this.createOption(option)
+            option = this.createOption(option);
+            this.$emit('option:created', option);
           }
           if (this.multiple) {
             option = this.selectedValue.concat(option)
@@ -620,31 +672,23 @@
        * @param  {Event} e
        * @return {void}
        */
-      toggleDropdown (e) {
-        const target = e.target;
-        const toggleTargets = [
-          this.$el,
-          this.searchEl,
-          this.$refs.toggle,
+      toggleDropdown ({target}) {
+        //  don't react to click on deselect/clear buttons,
+        //  they dropdown state will be set in their click handlers
+        const ignoredButtons = [
+          ...(this.$refs['deselectButtons'] || []),
+          ...([this.$refs['clearButton']] || [])
         ];
 
-        if (typeof this.$refs.openIndicator !== 'undefined') {
-          toggleTargets.push(
-            this.$refs.openIndicator.$el,
-            // the line below is a bit gross, but required to support IE11 without adding polyfills
-            ...Array.prototype.slice.call(this.$refs.openIndicator.$el.childNodes),
-          );
+        if (ignoredButtons.some(ref => ref.contains(target) || ref === target)) {
+          return;
         }
 
-        if (toggleTargets.indexOf(target) > -1 || target.classList.contains('vs__selected')) {
-          if (this.open) {
-            this.searchEl.blur(); // dropdown will close on blur
-          } else {
-            if (!this.disabled) {
-              this.open = true;
-              this.searchEl.focus();
-            }
-          }
+        if (this.open) {
+          this.searchEl.blur();
+        } else if (!this.disabled) {
+          this.open = true;
+          this.searchEl.focus();
         }
       },
 
@@ -834,49 +878,46 @@
       },
 
       /**
-       * Search 'input' KeyBoardEvent handler.
+       * Search <input> KeyBoardEvent handler.
        * @param e {KeyboardEvent}
        * @return {Function}
        */
       onSearchKeyDown (e) {
-        switch (e.keyCode) {
-          case 8:
-            //  delete
-            return this.maybeDeleteValue();
-          case 9:
-            //  tab
-            return this.onTab();
-        }
-      },
+        const preventAndSelect = e => {
+          e.preventDefault();
+          return !this.isComposing && this.typeAheadSelect();
+        };
 
-      /**
-       * Search 'input' KeyBoardEvent handler.
-       * @param e {KeyboardEvent}
-       * @return {Function}
-       */
-      onSearchKeyUp (e) {
-        switch (e.keyCode) {
-          case 27:
-            //  esc
-            return this.onEscape();
-          case 38:
-            //  up.prevent
+        const defaults = {
+          //  delete
+          8: e => this.maybeDeleteValue(),
+          //  tab
+          9: e => this.onTab(),
+          //  esc
+          27: e => this.onEscape(),
+          //  up.prevent
+          38: e => {
             e.preventDefault();
             return this.typeAheadUp();
-          case 40:
-            //  down.prevent
+          },
+          //  down.prevent
+          40: e => {
             e.preventDefault();
             return this.typeAheadDown();
-          case 13:
-            //  enter.prevent
-            e.preventDefault();
-            return this.typeAheadSelect();
+          },
+        };
+
+        this.selectOnKeyCodes.forEach(keyCode => defaults[keyCode] = preventAndSelect);
+
+        const handlers = this.mapKeydown(defaults, this);
+
+        if (typeof handlers[e.keyCode] === 'function') {
+          return handlers[e.keyCode](e);
         }
       }
     },
 
     computed: {
-
       /**
        * Determine if the component needs to
        * track the state of values internally.
@@ -948,11 +989,12 @@
               'value': this.search,
             },
             events: {
+              'compositionstart': () => this.isComposing = true,
+              'compositionend': () => this.isComposing = false,
               'keydown': this.onSearchKeyDown,
-              'keyup': this.onSearchKeyUp,
               'blur': this.onSearchBlur,
               'focus': this.onSearchFocus,
-              'input': (e) => this.search = e.target.value
+              'input': (e) => this.search = e.target.value,
             },
           },
           spinner: {
